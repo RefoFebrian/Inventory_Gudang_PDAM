@@ -11,10 +11,10 @@ export class AuthService {
   ) {}
 
   // Fungsi untuk Login
-  async signIn(email: string, pass: string) {
+  async signIn(username: string, pass: string) {
     // 1. Cari user berdasarkan email
     // (Kita perlu menambahkan method findByEmail di UsersService nanti, lihat Langkah 4.5)
-    const user = await this.usersService.findByEmail(email);
+    const user = await this.usersService.findByUsername(username);
 
     if (!user) {
       throw new UnauthorizedException('Email tidak ditemukan');
@@ -27,7 +27,7 @@ export class AuthService {
     }
 
     // 3. Jika oke, buatkan payload (isi token)
-    const payload = { sub: user.id, email: user.email, name: user.name };
+    const payload = { sub: user.id, username: user.username, name: user.name };
 
     // 4. Return tokennya
     return {

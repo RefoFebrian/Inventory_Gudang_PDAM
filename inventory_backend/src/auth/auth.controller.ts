@@ -3,7 +3,7 @@ import { AuthService } from './auth.service';
 
 // Kita buat DTO sederhana di sini saja biar cepat (atau buat file terpisah lebih baik)
 class LoginDto {
-  email: string;
+  username: string;
   password: string;
 }
 
@@ -14,6 +14,6 @@ export class AuthController {
   @HttpCode(HttpStatus.OK) // Agar return 200 OK, bukan 201 Created
   @Post('login')
   signIn(@Body() signInDto: LoginDto) {
-    return this.authService.signIn(signInDto.email, signInDto.password);
+    return this.authService.signIn(signInDto.username, signInDto.password);
   }
 }
