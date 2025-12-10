@@ -17,9 +17,54 @@ datasource db {
 //model user
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  password  String
-  name      String?
-  createdAt DateTime @default(now())
+  id           Int                @id @default(autoincrement())
+  username     String             @unique
+  password     String
+  name         String?
+  createdAt    DateTime           @default(now())
+
+  items        Item[]             // Barang yang didaftarkan user ini
+  transactions StockTransaction[] // Riwayat transaksi yang dilakukan user ini
+}
+
+// Model barang
+
+model Item {
+  id           Int                @id @default(autoincrement())
+  name         String
+  description  String?
+  quantity     Int                @default(0)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  userId       Int
+  user         User               @relation(fields: [userId], references: [id])
+  
+  transactions StockTransaction[] // Relasi ke riwayat transaksi
+}
+
+// Model Riwayat Barang = Mencatat setiap perubahan stok
+
+model StockTransaction {
+  id           Int             @id @default(autoincrement())
+  type         TransactionType
+  quantity     Int
+  
+  // --- KOLOM BARU UNTUK SURAT ---
+  documentNo   String          @unique // Nomor Surat (Ex: BBM/2025/12/001)
+  externalParty String?        // Nama Vendor (utk IN) atau Nama Peminta (utk OUT)
+  // ------------------------------
+  
+  notes        String?
+  createdAt    DateTime        @default(now())
+
+  itemId       Int
+  item         Item            @relation(fields: [itemId], references: [id])
+  userId       Int
+  user         User            @relation(fields: [userId], references: [id])
+}
+
+enum TransactionType {
+  IN
+  OUT
 }
