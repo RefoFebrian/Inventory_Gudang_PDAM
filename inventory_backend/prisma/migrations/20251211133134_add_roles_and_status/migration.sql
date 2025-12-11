@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE `stocktransaction` ADD COLUMN `status` ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'APPROVED';
+
+-- AlterTable
+ALTER TABLE `user` ADD COLUMN `role` ENUM('ADMIN', 'USER') NOT NULL DEFAULT 'USER';

@@ -17,7 +17,7 @@ export class AuthService {
     const user = await this.usersService.findByUsername(username);
 
     if (!user) {
-      throw new UnauthorizedException('Email tidak ditemukan');
+      throw new UnauthorizedException('Username tidak ditemukan');
     }
 
     // 2. Cek apakah password cocok
@@ -27,7 +27,7 @@ export class AuthService {
     }
 
     // 3. Jika oke, buatkan payload (isi token)
-    const payload = { sub: user.id, username: user.username, name: user.name };
+    const payload = { sub: user.id, username: user.username, name: user.name, role:user.role };
 
     // 4. Return tokennya
     return {
