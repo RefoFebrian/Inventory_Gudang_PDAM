@@ -2,7 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateItemDto } from './dto/update-item.dto';
 import { PrismaService } from '../prisma/prisma.service';
-import { TransactionType } from '@prisma/client';
+import { Role, TransactionStatus, TransactionType } from '@prisma/client';
 
 @Injectable()
 export class ItemsService {
@@ -42,12 +42,6 @@ export class ItemsService {
     });
   }
 
-  // ==========================================================
-  // LOGIC TRANSAKSI & NOMOR SURAT (YANG ERROR TADI)
-  // ==========================================================
-
-  // 1. Helper Private: Membuat Nomor Surat Otomatis
-  // Format: TYPE/YYYYMMDD/XXX (Contoh: IN/20231210/001)
   private async generateDocumentNo(type: 'IN' | 'OUT'): Promise<string> {
     const now = new Date();
     // Ambil tanggal format YYYYMMDD
@@ -82,7 +76,7 @@ export class ItemsService {
     externalParty?: string,
   ) {
     return this.prisma.$transaction(async (tx) => {
-      // Generate No Surat 
+      // Generate No Surat
       const docNo = await this.generateDocumentNo('IN');
 
       // Update jumlah barang di tabel Item
@@ -100,7 +94,7 @@ export class ItemsService {
           type: TransactionType.IN,
           notes: notes,
           documentNo: docNo,
-          externalParty: externalParty, 
+          externalParty: externalParty,
         },
       });
 
@@ -113,39 +107,58 @@ export class ItemsService {
     id: number,
     quantity: number,
     userId: number,
-    notes?: string,
-    externalParty?: string,
+    userRole: Role, // <--- Butuh info Role User
+    notes: string,
+    externalParty: string,
   ) {
     return this.prisma.$transaction(async (tx) => {
-      // Cek stok 
+      // Cek barang ada gak?
       const currentItem = await tx.item.findUnique({ where: { id } });
-      if (!currentItem || currentItem.quantity < quantity) {
-        throw new BadRequestException('Stok barang tidak mencukupi!');
+      if (!currentItem) throw new BadRequestException('Barang tidak ditemukan');
+
+      // Tentukan Status & Aksi berdasarkan Role
+      let status: TransactionStatus = TransactionStatus.APPROVED;
+
+      if (userRole === Role.USER) {
+        status = TransactionStatus.PENDING;
+        // Kalau User, HANYA Buat Request. JANGAN kurangi stok dulu.
+      } else {
+        // Kalau Admin, Cek stok cukup gak? Lalu kurangi.
+        if (currentItem.quantity < quantity) {
+          throw new BadRequestException('Stok tidak cukup!');
+        }
+        await tx.item.update({
+          where: { id },
+          data: { quantity: { decrement: quantity } },
+        });
       }
 
-      // Generate No Surat
+      // Generate No Surat (Otomatis)
+      // Note: Kalau PENDING mungkin format nomornya beda (misal: REQ/...),
+      // tapi biar simpel kita samakan dulu atau pakai prefix status.
       const docNo = await this.generateDocumentNo('OUT');
 
-      // Kurangi jumlah barang
-      const item = await tx.item.update({
-        where: { id },
-        data: { quantity: { decrement: quantity } },
-      });
-
-      // Catat di Buku Log
+      // Simpan Transaksi
       const transaction = await tx.stockTransaction.create({
         data: {
           itemId: id,
           userId: userId,
           quantity: quantity,
           type: TransactionType.OUT,
+          status: status, // <--- PENDING atau APPROVED
           notes: notes,
           documentNo: docNo,
           externalParty: externalParty,
         },
       });
 
-      return { item, transaction };
+      return {
+        message:
+          userRole === Role.USER
+            ? 'Request berhasil dibuat, menunggu approval Admin.'
+            : 'Stok berhasil dikurangi.',
+        transaction,
+      };
     });
   }
 }

@@ -21,6 +21,7 @@ model User {
   username     String             @unique
   password     String
   name         String?
+  role         Role               @default(USER)
   createdAt    DateTime           @default(now())
 
   items        Item[]             // Barang yang didaftarkan user ini
@@ -50,10 +51,11 @@ model StockTransaction {
   type         TransactionType
   quantity     Int
   
-  // --- KOLOM BARU UNTUK SURAT ---
+  // Status Transaksi: PENDING (Request User), APPROVED (Disetujui Admin), REJECTED
+  status        TransactionStatus @default(APPROVED) // <--- Default Approved (buat admin)
+  
   documentNo   String          @unique // Nomor Surat (Ex: BBM/2025/12/001)
   externalParty String?        // Nama Vendor (utk IN) atau Nama Peminta (utk OUT)
-  // ------------------------------
   
   notes        String?
   createdAt    DateTime        @default(now())
@@ -62,6 +64,17 @@ model StockTransaction {
   item         Item            @relation(fields: [itemId], references: [id])
   userId       Int
   user         User            @relation(fields: [userId], references: [id])
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum TransactionStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum TransactionType {
