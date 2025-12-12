@@ -53,10 +53,25 @@ export class UsersService {
 
   // 4. UPDATE
   async update(id: number, updateUserDto: UpdateUserDto) {
-    return this.prisma.user.update({
-      where: { id },
-      data: updateUserDto,
-    });
+    try {
+      if (updateUserDto.password) {
+        updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
+      }
+
+      return await this.prisma.user.update({
+        where: { id },
+        data: updateUserDto,
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2002') {
+          throw new ConflictException(
+            'Username tersebut sudah digunakan user lain.',
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   // 5. DELETE
