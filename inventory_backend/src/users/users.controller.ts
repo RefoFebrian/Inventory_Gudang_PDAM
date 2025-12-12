@@ -22,7 +22,7 @@ export class UsersController {
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(Role.ADMIN)
-  @Post()
+  @Post('register')
   create(@Body() createUserDto: CreateUserDto) {
     return this.usersService.create(createUserDto);
   }
@@ -35,7 +35,6 @@ export class UsersController {
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    // Konversi id string ke number dengan tanda '+'
     return this.usersService.findOne(+id);
   }
 

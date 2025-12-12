@@ -1,30 +1,36 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class UsersService {
   constructor(private prisma: PrismaService) {}
 
   async create(createUserDto: CreateUserDto) {
-    const saltRounds = 10;
+    try {
+      // 1. Hash Password
+      const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
 
-    // 2. Hash password yang dikirim user
-    const hashedPassword = await bcrypt.hash(
-      createUserDto.password,
-      saltRounds,
-    );
-
-    // 3. Simpan ke database dengan password yang SUDAH di-hash
-    // Kita ganti field password asli dengan hashed password
-    return this.prisma.user.create({
-      data: {
-        ...createUserDto,
-        password: hashedPassword,
-      },
-    });
+      // 2. Simpan ke Database
+      return await this.prisma.user.create({
+        data: {
+          ...createUserDto,
+          password: hashedPassword,
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2002') {
+          throw new ConflictException(
+            'Username sudah digunakan, silakan pilih yang lain.',
+          );
+        }
+      }
+      throw new InternalServerErrorException('Terjadi kesalahan pada server');
+    }
   }
 
   // 2. READ ALL

@@ -16,9 +16,10 @@ import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateItemDto } from './dto/update-item.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { StockUpdateDto } from './dto/stock-update.dto';
-import { RolesGuard } from '../auth/roles.guard'; // Gunakan ../ agar path relative aman
-import { Roles } from '../auth/roles.decorator'; // Gunakan ../ agar path relative aman
+import { RolesGuard } from '../auth/roles.guard'; 
+import { Roles } from '../auth/roles.decorator';
 import { Role } from '@prisma/client';
+import { ResponseMessage } from 'src/common/decorators/response-message.decorator';
 
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Controller('items')
@@ -32,6 +33,7 @@ export class ItemsController {
   }
 
   @Get()
+  @ResponseMessage("Berhasil Mendapat Data Barang")
   findAll() {
     return this.itemsService.findAll();
   }
