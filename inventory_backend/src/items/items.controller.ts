@@ -27,7 +27,7 @@ export class ItemsController {
   constructor(private readonly itemsService: ItemsService) {}
 
   @Roles(Role.ADMIN)
-  @Post()
+  @Post("createItem")
   create(@Body() createItemDto: CreateItemDto, @Request() req) {
     return this.itemsService.create(createItemDto, req.user.userId);
   }
