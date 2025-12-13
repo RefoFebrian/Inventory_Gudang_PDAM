@@ -10,37 +10,106 @@ import {
   Request,
   HttpException,
   HttpStatus,
+  Query,
+  Res,
 } from '@nestjs/common';
 import { ItemsService } from './items.service';
 import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateItemDto } from './dto/update-item.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { StockUpdateDto } from './dto/stock-update.dto';
-import { RolesGuard } from '../auth/roles.guard'; 
+import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { Role } from '@prisma/client';
-import { ResponseMessage } from 'src/common/decorators/response-message.decorator';
+import { ResponseMessage } from '../common/decorators/response-message.decorator';
+import { GetTransactionsFilterDto } from './dto/get-transactions-filter.dto';
+import { PdfService } from 'src/common/service/pdf.service';
+import type { Response } from 'express';
 
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Controller('items')
 export class ItemsController {
-  constructor(private readonly itemsService: ItemsService) {}
+  constructor(
+    private readonly itemsService: ItemsService,
+    private readonly pdfService: PdfService
+  ) {}
+
+  // REPORT & HISTORY 
+  @Get('history')
+  @ResponseMessage('Berhasil mengambil data riwayat transaksi')
+  getTransactions(@Query() filterDto: GetTransactionsFilterDto) {
+    return this.itemsService.findAllTransactions(filterDto);
+  }
+
+  // Get Detail Transaksi
+  @Get('transactions/:id')
+  @ResponseMessage('Berhasil mengambil detail transaksi')
+  async findOneTransaction(@Param('id') id: string) {
+    return this.itemsService.findTransactionById(+id);
+  }
+
+  // Download PDF Bukti Transaksi/Surat Jalan
+  @Get('transactions/:id/pdf')
+  async downloadPdf(@Param('id') id: string, @Res() res: Response) {
+    // Ambil Data
+    const transaction = await this.itemsService.findTransactionById(+id);
+
+    // Generate PDF 
+    this.pdfService.generateTransactionPdf(transaction, res);
+  }
+
+  // STOCK MANAGEMENT
+
+  // Barang Masuk Restock
+  @Roles(Role.ADMIN)
+  @Post(':id/in')
+  async stockIn(
+    @Param('id') id: string,
+    @Body() dto: StockUpdateDto,
+    @Request() req,
+  ) {
+    return this.itemsService.addStock(
+      +id,
+      dto.quantity,
+      req.user.userId,
+      dto.notes || '-',
+      dto.externalParty,
+    );
+  }
+
+  // Barang Keluar (Request)
+  @Post(':id/out')
+  async stockOut(
+    @Param('id') id: string,
+    @Body() dto: StockUpdateDto,
+    @Request() req,
+  ) {
+    try {
+      return await this.itemsService.reduceStock(
+        +id,
+        dto.quantity,
+        req.user.userId,
+        req.user.role,
+        dto.notes || '-',
+        dto.externalParty,
+      );
+    } catch (error) {
+      throw new HttpException(error.message, HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  // CRUD BARANG 
 
   @Roles(Role.ADMIN)
-  @Post("createItem")
+  @Post('createItem')
   create(@Body() createItemDto: CreateItemDto, @Request() req) {
     return this.itemsService.create(createItemDto, req.user.userId);
   }
 
   @Get()
-  @ResponseMessage("Berhasil Mendapat Data Barang")
+  @ResponseMessage('Berhasil Mendapat Data Barang')
   findAll() {
     return this.itemsService.findAll();
-  }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.itemsService.findOne(+id);
   }
 
   @Roles(Role.ADMIN)
@@ -55,42 +124,9 @@ export class ItemsController {
     return this.itemsService.remove(+id);
   }
 
-  // ENDPOINT: Barang Masuk (Restock) - ADMIN ONLY
-  @Roles(Role.ADMIN)
-  @Post(':id/in')
-  async stockIn(
-    @Param('id') id: string,
-    @Body() dto: StockUpdateDto, // Namakan 'dto' agar ringkas
-    @Request() req,
-  ) {
-    return this.itemsService.addStock(
-      +id,
-      dto.quantity,
-      req.user.userId,
-      dto.notes || '-',
-      dto.externalParty,
-    );
-  }
 
-  // ENDPOINT: Barang Keluar (Request) - USER & ADMIN
-  @Post(':id/out')
-  async stockOut(
-    @Param('id') id: string,
-    @Body() dto: StockUpdateDto, // <--- PERBAIKAN: Namakan 'dto' agar variabel 'dto.quantity' dikenali
-    @Request() req,
-  ) {
-    try {
-      // Tambahkan 'await' agar try-catch bisa menangkap error
-      return await this.itemsService.reduceStock(
-        +id,
-        dto.quantity,
-        req.user.userId,
-        req.user.role, // Kirim Role User ke Service
-        dto.notes || '-',
-        dto.externalParty,
-      );
-    } catch (error) {
-      throw new HttpException(error.message, HttpStatus.BAD_REQUEST);
-    }
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.itemsService.findOne(+id);
   }
 }

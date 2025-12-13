@@ -3,11 +3,13 @@ import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateItemDto } from './dto/update-item.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role, TransactionStatus, TransactionType } from '@prisma/client';
+import { GetTransactionsFilterDto } from './dto/get-transactions-filter.dto';
 
 @Injectable()
 export class ItemsService {
   constructor(private prisma: PrismaService) {}
 
+  //  CRUD BARANG
   async create(createItemDto: CreateItemDto, userId: number) {
     return this.prisma.item.create({
       data: {
@@ -42,6 +44,8 @@ export class ItemsService {
     });
   }
 
+  // HELPER NOMOR SURAT OTOMATIS
+
   private async generateDocumentNo(type: 'IN' | 'OUT'): Promise<string> {
     const now = new Date();
     // Ambil tanggal format YYYYMMDD
@@ -67,7 +71,9 @@ export class ItemsService {
     return `${type}/${dateStr}/${sequence}`;
   }
 
-  //  Tambah Stok (Barang Masuk)
+  // STOCK MANAGEMENT 
+
+  // Tambah Stok (Barang Masuk)
   async addStock(
     id: number,
     quantity: number,
@@ -107,7 +113,7 @@ export class ItemsService {
     id: number,
     quantity: number,
     userId: number,
-    userRole: Role, // <--- Butuh info Role User
+    userRole: Role,
     notes: string,
     externalParty: string,
   ) {
@@ -134,8 +140,6 @@ export class ItemsService {
       }
 
       // Generate No Surat (Otomatis)
-      // Note: Kalau PENDING mungkin format nomornya beda (misal: REQ/...),
-      // tapi biar simpel kita samakan dulu atau pakai prefix status.
       const docNo = await this.generateDocumentNo('OUT');
 
       // Simpan Transaksi
@@ -145,7 +149,7 @@ export class ItemsService {
           userId: userId,
           quantity: quantity,
           type: TransactionType.OUT,
-          status: status, // <--- PENDING atau APPROVED
+          status: status,
           notes: notes,
           documentNo: docNo,
           externalParty: externalParty,
@@ -160,5 +164,70 @@ export class ItemsService {
         transaction,
       };
     });
+  }
+
+  // REPORTING & PDF HELPERS
+
+  // Ambil Semua Transaksi dengan Filter
+  async findAllTransactions(filterDto: GetTransactionsFilterDto) {
+    const { startDate, endDate, type, status } = filterDto;
+
+    // Objek Filter Prisma
+    const whereClause: any = {};
+
+    // 1. Filter Tanggal (Range)
+    if (startDate && endDate) {
+      whereClause.createdAt = {
+        gte: new Date(startDate),
+        lte: new Date(new Date(endDate).setHours(23, 59, 59)),
+      };
+    } else if (startDate) {
+      // Jika hanya hari ini kirim startDate
+      whereClause.createdAt = {
+        gte: new Date(new Date(startDate).setHours(0, 0, 0)),
+        lte: new Date(new Date(startDate).setHours(23, 59, 59)),
+      };
+    }
+
+    // 2. Filter Tipe (IN/OUT)
+    if (type) {
+      whereClause.type = type;
+    }
+
+    // 3. Filter Status
+    if (status) {
+      whereClause.status = status;
+    }
+
+    // Eksekusi Query
+    return await this.prisma.stockTransaction.findMany({
+      where: whereClause,
+      include: {
+        item: true,
+        user: {
+          select: { id: true, username: true, name: true },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+  }
+
+  // Helper untuk mengambil satu data transaksi buat PDF & Detail Transaksi
+  async findTransactionById(id: number) {
+    const transaction = await this.prisma.stockTransaction.findUnique({
+      where: { id },
+      include: {
+        item: true,
+        user: true, 
+      },
+    });
+
+    if (!transaction) {
+      throw new BadRequestException('Transaksi tidak ditemukan');
+    }
+
+    return transaction;
   }
 }
