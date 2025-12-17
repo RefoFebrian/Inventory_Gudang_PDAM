@@ -1,0 +1,92 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+
+//model user
+
+model User {
+  id           Int                @id @default(autoincrement())
+  username     String             @unique
+  password     String
+  name         String?
+  role         Role               @default(USER)
+  createdAt    DateTime           @default(now())
+
+  items                Item[]             // Barang yang didaftarkan user ini
+  transactions         StockTransaction[] // Riwayat transaksi yang dilakukan user ini
+  approvedTransactions StockTransaction[] @relation("ApproverRelation") 
+}
+
+// Model barang
+
+model Item {
+  id           Int                @id @default(autoincrement())
+  itemCode     String             @unique
+  name         String
+  description  String?
+  quantity     Int                @default(0)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  deletedAt    DateTime?
+
+  userId       Int
+  user         User               @relation(fields: [userId], references: [id])
+  
+  transactions StockTransaction[] // Relasi ke riwayat transaksi
+}
+
+// Model Riwayat Barang = Mencatat setiap perubahan stok
+
+model StockTransaction {
+  id            Int               @id @default(autoincrement())
+  type          TransactionType
+  quantity      Int
+  status        TransactionStatus @default(APPROVED) // <--- Default Approved (buat admin)
+  // Admin yang merubah status transaksi
+  approvedById  Int?         
+  // Nomor Surat
+  documentNo    String          @unique 
+   // Nama Vendor (utk IN) atau Nama Peminta (utk OUT)
+  externalParty String?       
+  notes        String?
+  createdAt    DateTime        @default(now())
+
+  itemId       Int
+  item         Item            @relation(fields: [itemId], references: [id])
+  userId       Int
+  user         User            @relation(fields: [userId], references: [id])
+
+  approver     User?           @relation("ApproverRelation", fields: [approvedById], references: [id])
+}
+
+// Role Akun
+enum Role {
+  ADMIN
+  USER
+}
+
+// Status Transaksi Barang
+enum TransactionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// Tipe Transaksi Barang
+enum TransactionType {
+  IN
+  OUT
+}
