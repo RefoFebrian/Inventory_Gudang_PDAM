@@ -4,27 +4,22 @@ import { UpdateItemDto } from './dto/update-item.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role, TransactionStatus, TransactionType } from '@prisma/client';
 import { GetTransactionsFilterDto } from './dto/get-transactions-filter.dto';
+import { CreateTransactionDto } from './dto/create-transaction.dto';
 
 @Injectable()
 export class ItemsService {
   constructor(private prisma: PrismaService) {}
 
-  //  CRUD BARANG
+  // CRUD MASTER BARANG
+  
   async create(createItemDto: CreateItemDto, userId: number) {
     try {
       return await this.prisma.item.create({
-        data: {
-          ...createItemDto,
-          userId,         
-        },
+        data: { ...createItemDto, userId },
       });
     } catch (error) {
       if (error.code === 'P2002') {
-        const target = error.meta?.target;
-        if (target && (target as string[]).includes('itemCode')) {
-             throw new BadRequestException(`Barang dengan kode ${createItemDto.itemCode} sudah terdaftar!`);
-        }
-        throw new BadRequestException('Data unik duplikat ditemukan');
+        throw new BadRequestException(`Barang dengan kode tersebut sudah terdaftar!`);
       }
       throw error;
     }
@@ -32,57 +27,27 @@ export class ItemsService {
 
   async findAll(search?: string) {
     const searchFilter: any = {};
-    
     if (search) {
       searchFilter.OR = [
-        { name: { contains: search } }, 
+        { name: { contains: search } },
         { itemCode: { contains: search } },
       ];
     }
-
     return this.prisma.item.findMany({
-      where: {
-        deletedAt: null,
-        ...searchFilter,
-      },
-      select: {
-        id: true,          
-        itemCode: true,    
-        name: true,        
-        quantity: true,   
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
+      where: { deletedAt: null, ...searchFilter },
+      select: { id: true, itemCode: true, name: true, quantity: true },
+      orderBy: { createdAt: 'desc' }
     });
   }
 
   async findOne(id: number) {
     const item = await this.prisma.item.findFirst({
-      where: {
-        id: id,
-        deletedAt: null, 
-      },
-      select: {
-        id: true,
-        itemCode: true,
-        name: true,
-        description: true, 
-        quantity: true,
-        createdAt: true,   
-        updatedAt: true,   
-        user: {
-          select: {
-            id: true,
-            name: true,
-            username: true,
-          },
-        },
-      },
+      where: { id, deletedAt: null },
+      include: {
+        user: { select: { id: true, name: true, username: true } },
+      }
     });
-    if (!item) {
-      throw new NotFoundException(`Barang dengan ID ${id} tidak ditemukan`);
-    }
+    if (!item) throw new NotFoundException(`Barang ID ${id} tidak ditemukan`);
     return item;
   }
 
@@ -94,272 +59,219 @@ export class ItemsService {
   }
 
   async remove(id: number) {
-    await this.findOne(id); 
-
-    const transactionCount = await this.prisma.stockTransaction.count({
+    // Cek di tabel detail transaksi
+    const transactionCount = await this.prisma.transactionItem.count({
       where: { itemId: id },
     });
 
     if (transactionCount > 0) {
-      // Soft delete
-      // Hanya update deletedAt, data tidak hilang tapi tersembunyi
       await this.prisma.item.update({
         where: { id },
-        data: {
-          deletedAt: new Date(),
-        },
+        data: { deletedAt: new Date() },
       });
-      
-      return { 
-        message: 'Barang berhasil diarsipkan karena memiliki riwayat transaksi.' 
-      };
-
+      return { message: 'Barang diarsipkan (Soft Delete) karena memiliki riwayat.' };
     } else {
-      // Hard delete barang yang tidak memiliki riwayat transaksi barang
-      await this.prisma.item.delete({
-        where: { id },
-      });
-
-      return { 
-        message: 'Barang berhasil dihapus' 
-      };
+      await this.prisma.item.delete({ where: { id } });
+      return { message: 'Barang berhasil dihapus permanen.'};
     }
   }
 
-  // HELPER NOMOR SURAT OTOMATIS
+  // BULK TRANSACTION LOGIC
 
-  private async generateDocumentNo(type: 'IN' | 'OUT'): Promise<string> {
+  private async generateDocumentNo(type: TransactionType): Promise<string> {
     const now = new Date();
-    // Ambil tanggal format YYYYMMDD
     const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-
-    // Hitung berapa transaksi tipe ini HARI INI
+    
+    // Hitung header transaksi hari ini
     const startOfDay = new Date(now.setHours(0, 0, 0, 0));
     const endOfDay = new Date(now.setHours(23, 59, 59, 999));
 
-    const count = await this.prisma.stockTransaction.count({
+    const count = await this.prisma.transaction.count({
       where: {
-        type: type === 'IN' ? TransactionType.IN : TransactionType.OUT,
-        createdAt: {
-          gte: startOfDay,
-          lte: endOfDay,
-        },
+        type: type,
+        createdAt: { gte: startOfDay, lte: endOfDay },
       },
     });
 
-    // Urutan = jumlah + 1. Dipadding 3 digit (001)
     const sequence = (count + 1).toString().padStart(3, '0');
-
     return `${type}/${dateStr}/${sequence}`;
   }
 
-  // STOCK MANAGEMENT 
-
-  // Tambah Stok (Barang Masuk)
-  async addStock(
-    id: number,
-    quantity: number,
-    userId: number,
-    notes?: string,
-    externalParty?: string,
-  ) {
+  // Buat Bulk Transaksi
+  async createTransaction(userId: number, role: Role, dto: CreateTransactionDto) {
     return this.prisma.$transaction(async (tx) => {
-      // Pastikan barang ada dan aktif
-      const item = await tx.item.findFirst({ where: { id, deletedAt: null } });
-      if (!item) throw new NotFoundException('Barang tidak ditemukan');
+      
+      // Tentukan Status Transaksi Awal
+      let initialStatus: TransactionStatus = TransactionStatus.PENDING;
 
-      // Generate No Surat
-      const docNo = await this.generateDocumentNo('IN');
+      if (dto.type === TransactionType.IN) {
+        // Barang Masuk selalu Completed
+        initialStatus = TransactionStatus.COMPLETED; 
+      } else if (dto.type === TransactionType.OUT) {
+        // Jika Admin yang minta barang keluar otomatis APPROVED
+        // Jika User Biasa otomatis PENDING
+        initialStatus = role === Role.ADMIN ? TransactionStatus.APPROVED : TransactionStatus.PENDING;
+      }
 
-      // Update jumlah barang di tabel Item
-      const updatedItem = await tx.item.update({
-        where: { id },
-        data: { quantity: { increment: quantity } },
-      });
+      // Generate Doc No & Code
+      const docNo = await this.generateDocumentNo(dto.type);
+      const uniqueCode = `TRX-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-      // Catat di Buku Log (StockTransaction)
-      const transaction = await tx.stockTransaction.create({
+      // Buat Header Transaksi
+      const transaction = await tx.transaction.create({
         data: {
-          itemId: id,
-          userId: userId,
-          quantity: quantity,
-          type: TransactionType.IN,
-          status: TransactionStatus.APPROVED,
-          notes: notes,
+          code: uniqueCode,
           documentNo: docNo,
-          externalParty: externalParty,
+          type: dto.type,
+          status: initialStatus,
+          userId: userId,
+          notes: dto.notes,
+          externalParty: dto.externalParty,
+          // Jika admin langsung approve oleh dirinya sendiri
+          approvedById: initialStatus === TransactionStatus.APPROVED ? userId : null,
         },
       });
-      return { item: updatedItem, transaction };
-    });
-  }
 
-  // Kurangi Stok (Barang Keluar)
-  async reduceStock(
-    id: number,
-    quantity: number,
-    userId: number,
-    userRole: Role,
-    notes: string,
-    externalParty: string,
-  ) {
-    return this.prisma.$transaction(async (tx) => {
-      // Cek barang ada dan aktif?
-      const currentItem = await tx.item.findFirst({ where: { id, deletedAt: null } });
-      if (!currentItem) throw new NotFoundException('Barang tidak ditemukan');
+      // 4. Loop Detail Items
+      for (const itemDto of dto.items) {
+        const item = await tx.item.findUnique({ where: { id: itemDto.itemId } });
+        if (!item) throw new NotFoundException(`Barang ID ${itemDto.itemId} tidak ditemukan`);
 
-      // Tentukan Status & Aksi berdasarkan Role
-      let status: TransactionStatus = TransactionStatus.APPROVED;
-
-      if (userRole === Role.USER) {
-        status = TransactionStatus.PENDING;
-      } else {
-        // Kalau Admin, Cek stok cukup gak? Lalu kurangi.
-        if (currentItem.quantity < quantity) {
-          throw new BadRequestException(`Stok tidak cukup! Sisa stok: ${currentItem.quantity}`);
+        // Kondisi Barang Masuk (IN)
+        if (dto.type === TransactionType.IN) {
+          await tx.item.update({
+            where: { id: itemDto.itemId },
+            data: { quantity: { increment: itemDto.quantity } },
+          });
         }
-        await tx.item.update({
-          where: { id },
-          data: { quantity: { decrement: quantity } },
+
+        // Kondisi Barang Keluar (OUT)
+        if (dto.type === TransactionType.OUT) {
+          // Cek dulu stok cukup gak
+          if (item.quantity < itemDto.quantity) {
+            throw new BadRequestException(`Stok ${item.name} tidak cukup! Sisa: ${item.quantity}, Diminta: ${itemDto.quantity}`);
+          }
+
+          // Jika Role Admin Langsung Kurangi Stok
+          if (role === Role.ADMIN) {
+            await tx.item.update({
+              where: { id: itemDto.itemId },
+              data: { quantity: { decrement: itemDto.quantity } },
+            });
+          }
+          // Jika Role User Jangan kurangi stok dulu (tunggu approval admin)
+        }
+
+        // Simpan Detail
+        await tx.transactionItem.create({
+          data: {
+            transactionId: transaction.id,
+            itemId: itemDto.itemId,
+            quantity: itemDto.quantity,
+          },
         });
       }
 
-      // Generate No Surat
-      const docNo = await this.generateDocumentNo('OUT');
-
-      // Simpan Transaksi
-      const transaction = await tx.stockTransaction.create({
-        data: {
-          itemId: id,
-          userId: userId,
-          quantity: quantity,
-          type: TransactionType.OUT,
-          status: status,
-          notes: notes,
-          documentNo: docNo,
-          externalParty: externalParty,
-        },
-      });
-
-      return {
-        message: userRole === Role.USER
-            ? 'Permintaan barang berhasil dibuat, menunggu persetujuan Admin.'
-            : 'Stok berhasil dikurangi.',
-        transaction,
-      };
+      return transaction;
     });
   }
 
-  // REPORTING & PDF HELPERS
-
-  // Ambil Semua Transaksi dengan Filter
-  async findAllTransactions(filterDto: GetTransactionsFilterDto) {
-    const { startDate, endDate, type, status } = filterDto;
-
-    // Objek Filter Prisma
-    const whereClause: any = {};
-
-    // 1. Filter Tanggal (Range)
-    if (startDate && endDate) {
-      whereClause.createdAt = {
-        gte: new Date(startDate),
-        lte: new Date(new Date(endDate).setHours(23, 59, 59)),
-      };
-    } else if (startDate) {
-      // Jika hanya hari ini kirim startDate
-      whereClause.createdAt = {
-        gte: new Date(new Date(startDate).setHours(0, 0, 0)),
-        lte: new Date(new Date(startDate).setHours(23, 59, 59)),
-      };
-    }
-
-    // Filter Tipe & Status
-    if (type) whereClause.type = type;
-    if (status) whereClause.status = status;
-
-    // Eksekusi Query
-    return await this.prisma.stockTransaction.findMany({
-      where: whereClause,
-      include: {
-        item: true,
-        user: {
-          select: { id: true, username: true, name: true },
-        },
-        approver: { 
-          select: { id: true, username: true, name: true }, 
-        },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
-  }
-
-  // Helper untuk mengambil satu data transaksi buat PDF & Detail Transaksi
-  async findTransactionById(id: number) {
-    const transaction = await this.prisma.stockTransaction.findUnique({
-      where: { id },
-      include: {
-        item: true,
-        user: { select: { id: true, name: true, username: true } },
-        approver: { select: { id: true, name: true } },
-      },
-    });
-
-    if (!transaction) throw new NotFoundException('Transaksi tidak ditemukan');
-    return transaction;
-  }
-
-  // APPROVAL TRANSAKSI 
+  // APPROVAL & STATUS UPDATE
   async updateTransactionStatus(
     transactionId: number,
     status: 'APPROVED' | 'REJECTED',
     adminId: number, 
   ) {
     return this.prisma.$transaction(async (tx) => {
-      // Ambil data transaksi target
-      const transaction = await tx.stockTransaction.findUnique({
+      // Ambil transaksi beserta detail items-nya
+      const transaction = await tx.transaction.findUnique({
         where: { id: transactionId },
-        include: { item: true },
+        include: { items: { include: { item: true } } },
       });
 
       if (!transaction) throw new NotFoundException('Transaksi tidak ditemukan');
-
-      //  Cek hanya transaksi PENDING
-      if (transaction.status !== 'PENDING') {
-        throw new BadRequestException(
-          `Tidak bisa mengubah transaksi yang statusnya sudah ${transaction.status}`,
-        );
+      if (transaction.status !== TransactionStatus.PENDING) {
+        throw new BadRequestException(`Transaksi sudah ${transaction.status}, tidak bisa diubah.`);
       }
 
+      // Kondisi REJECT
       if (status === 'REJECTED') {
-        return await tx.stockTransaction.update({
+        return await tx.transaction.update({
           where: { id: transactionId },
-          data: {
-            status: 'REJECTED',
-            approvedById: adminId,
-          },
+          data: { status: TransactionStatus.REJECTED, approvedById: adminId },
         });
-      } else {
-        if (transaction.item.quantity < transaction.quantity) {
-          throw new BadRequestException(
-            `Gagal Approve. Stok barang sisa ${transaction.item.quantity}, tapi permintaan ${transaction.quantity}`,
-          );
+      }
+
+      // Kondisi APPROVE
+      // Kita harus mengurangi stok untuk SETIAP item di keranjang
+      for (const detail of transaction.items) {
+        // Cek stok lagi untuk memastikan stok tidak ada yang mines
+        if (detail.item.quantity < detail.quantity) {
+          throw new BadRequestException(`Gagal Approve. Stok ${detail.item.name} sisa ${detail.item.quantity}, diminta ${detail.quantity}`);
         }
 
+        // Kurangi Stok
         await tx.item.update({
-          where: { id: transaction.itemId },
-          data: { quantity: { decrement: transaction.quantity } },
-        });
-
-        return await tx.stockTransaction.update({
-          where: { id: transactionId },
-          data: { 
-            status: 'APPROVED',
-            approvedById: adminId
-          },
+          where: { id: detail.itemId },
+          data: { quantity: { decrement: detail.quantity } },
         });
       }
+
+      // Update Header jadi APPROVED
+      return await tx.transaction.update({
+        where: { id: transactionId },
+        data: { status: TransactionStatus.APPROVED, approvedById: adminId },
+      });
     });
+  }
+
+  // 4. REPORTING (Menyesuaikan Schema Baru)
+  async findAllTransactions(filterDto: GetTransactionsFilterDto) {
+    const { startDate, endDate, type, status } = filterDto;
+    const whereClause: any = {};
+
+    // Filter Tanggal
+    if (startDate) {
+      const start = new Date(startDate);
+      start.setHours(0,0,0,0);
+      const end = endDate ? new Date(endDate) : new Date(startDate);
+      end.setHours(23,59,59,999);
+      
+      whereClause.createdAt = { gte: start, lte: end };
+    }
+
+    if (type) whereClause.type = type;
+    if (status) whereClause.status = status;
+
+    return await this.prisma.transaction.findMany({
+      where: whereClause,
+      include: {
+        user: { select: { id: true, name: true, username: true } },
+        approver: { select: { id: true, name: true } },
+        items: { 
+          include: {
+            item: { select: { id: true, itemCode: true, name: true } }
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findTransactionById(id: number) {
+    const transaction = await this.prisma.transaction.findUnique({
+      where: { id },
+      include: {
+        user: { select: { id: true, name: true, username: true } },
+        approver: { select: { id: true, name: true } },
+        items: {
+          include: {
+            item: true
+          }
+        }
+      },
+    });
+    if (!transaction) throw new NotFoundException('Transaksi tidak ditemukan');
+    return transaction;
   }
 }
